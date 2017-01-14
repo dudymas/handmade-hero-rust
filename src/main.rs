@@ -2,6 +2,7 @@ extern crate winapi;
 extern crate kernel32;
 extern crate user32;
 extern crate gdi32;
+extern crate xinput;
 
 use std::mem::{size_of, zeroed};
 use std::os::raw::{c_void};
@@ -15,6 +16,7 @@ use kernel32::{GetModuleHandleA};
 use user32::{RegisterClassExW, CreateWindowExW, MessageBoxA};
 use user32::{PeekMessageW, TranslateMessage, DispatchMessageW};
 use user32::{DefWindowProcW, PostQuitMessage, BeginPaint, EndPaint};
+use xinput::{XInputGetState};
 
 struct OffscreenBuffer {
     width: i32,
@@ -210,6 +212,29 @@ fn main() {
                             TranslateMessage(&msg);
                             DispatchMessageW(&msg);
                         }
+
+                        for controller_index in 0..winapi::XUSER_MAX_COUNT {
+                            let mut controller_state: winapi::XINPUT_STATE = zeroed();
+                            if XInputGetState( controller_index, &mut controller_state) == winapi::ERROR_SUCCESS {
+                                let pad: winapi::XINPUT_GAMEPAD = controller_state.Gamepad;
+                                let up = pad.wButtons & winapi::XINPUT_GAMEPAD_DPAD_UP;
+                                let down = pad.wButtons & winapi::XINPUT_GAMEPAD_DPAD_DOWN;
+                                let left = pad.wButtons & winapi::XINPUT_GAMEPAD_DPAD_LEFT;
+                                let right = pad.wButtons & winapi::XINPUT_GAMEPAD_DPAD_RIGHT;
+
+                                let back = pad.wButtons & winapi::XINPUT_GAMEPAD_BACK;
+                                let left_shoulder = pad.wButtons & winapi::XINPUT_GAMEPAD_LEFT_SHOULDER;
+                                let right_shoulder = pad.wButtons & winapi::XINPUT_GAMEPAD_RIGHT_SHOULDER;
+                                let a_button = pad.wButtons & winapi::XINPUT_GAMEPAD_A;
+                                let b_button = pad.wButtons & winapi::XINPUT_GAMEPAD_B;
+                                let x_button = pad.wButtons & winapi::XINPUT_GAMEPAD_X;
+                                let y_button = pad.wButtons & winapi::XINPUT_GAMEPAD_Y;
+
+                                let stick_x = pad.sThumbLX;
+                                let stick_y = pad.sThumbLY;
+                            }
+                        }
+
                         let dim = wind32_get_window_dimension(window);
                         let device_context = user32::GetDC(window);
                         render_weird_gradient(&mut global_buffer, x_offset, y_offset);
