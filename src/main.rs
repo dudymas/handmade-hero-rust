@@ -20,10 +20,8 @@ use gdi32::{TextOutA};
 static SZ_CLASS: &'static [u8] = b"L\0n\0d\0C\0r\0a\0f\0t\0";
 static SZ_TITLE: &'static [u8] = b"t\0i\0t\0l\0e\0\0\0";
 static SZ_TEXT: &'static [u8] = b"Hello, world!";
-static mut bitmap_data: *mut c_void = 0 as *mut c_void;
-static mut bitmap_handle: winapi::HBITMAP = 0 as winapi::HBITMAP;
-static mut bitmap_device_context: HDC = 0 as HDC;
-static mut bit_map_info: winapi::BITMAPINFO = winapi::BITMAPINFO{
+static mut bitmap_memory: *mut c_void = 0 as *mut c_void;
+static mut bitmap_info: winapi::BITMAPINFO = winapi::BITMAPINFO{
     bmiHeader: winapi::BITMAPINFOHEADER{
         biSize: 0,
         biWidth: 0,
@@ -48,22 +46,19 @@ macro_rules! c_str {
 
 unsafe
 fn win32_resize_dib_section(width: i32, height: i32){
-    if bitmap_handle != 0 as winapi::HBITMAP{
-        gdi32::DeleteObject(bitmap_handle as *mut c_void);
+    if !bitmap_memory.is_null(){
+        kernel32::VirtualFree(bitmap_memory, 0, winapi::winnt::MEM_RELEASE);
     }
-    if bitmap_device_context == 0 as HDC {
-        bitmap_device_context = gdi32::CreateCompatibleDC(0 as HDC);
-    }
-    bit_map_info.bmiHeader.biSize = size_of::<winapi::BITMAPINFOHEADER>() as u32;
-    bit_map_info.bmiHeader.biWidth = width;
-    bit_map_info.bmiHeader.biHeight = height;
-    bitmap_handle = gdi32::CreateDIBSection(
-        bitmap_device_context,
-        &bit_map_info,
-        winapi::DIB_RGB_COLORS,
-        &mut bitmap_data,
-        zeroed(),
-        0
+    bitmap_info.bmiHeader.biSize = size_of::<winapi::BITMAPINFOHEADER>() as u32;
+    bitmap_info.bmiHeader.biWidth = width;
+    bitmap_info.bmiHeader.biHeight = height;
+    let bytes_per_pixel = 4;
+    let bitmap_memory_size = (width as u64 * height as u64)*bytes_per_pixel;
+    bitmap_memory = kernel32::VirtualAlloc(
+        0 as *mut c_void,
+        bitmap_memory_size,
+        winapi::winnt::MEM_COMMIT,
+        winapi::winnt::PAGE_READWRITE
     );
 }
 
@@ -73,9 +68,9 @@ fn win32_update_window( device_context: HDC, x: i32, y: i32, width: i32, height:
         device_context,
         x, y, width, height,
         x, y, width, height,
-        bitmap_data,
-        zeroed(),
-        0, zeroed()
+        bitmap_memory,
+        &bitmap_info,
+        winapi::DIB_RGB_COLORS, winapi::SRCCOPY
     );
 }
 
