@@ -4,23 +4,80 @@ extern crate user32;
 extern crate gdi32;
 
 use std::mem::{size_of, zeroed};
+use std::os::raw::{c_void};
 
 use winapi::{UINT, WPARAM, LPARAM, LRESULT, LPVOID, LPCSTR, LPCWSTR};
-use winapi::{HWND, HMENU, HICON, HCURSOR, HBRUSH};
+use winapi::{HWND, HDC, HMENU, HICON, HCURSOR, HBRUSH};
 use winapi::{WNDCLASSEXW, CS_OWNDC, CS_VREDRAW, CS_HREDRAW, COLOR_WINDOWFRAME};
 use winapi::{WS_OVERLAPPEDWINDOW, WS_VISIBLE, CW_USEDEFAULT};
-use winapi::{SW_SHOWDEFAULT, WM_DESTROY, WM_PAINT, WM_SIZE, WM_CLOSE, WM_ACTIVATEAPP};
+use winapi::{WM_DESTROY, WM_PAINT, WM_SIZE, WM_CLOSE, WM_ACTIVATEAPP};
 use kernel32::{GetModuleHandleA};
-use user32::{RegisterClassExW, CreateWindowExW, ShowWindow, MessageBoxA};
+use user32::{RegisterClassExW, CreateWindowExW, MessageBoxA};
 use user32::{GetMessageW, TranslateMessage, DispatchMessageW};
 use user32::{DefWindowProcW, PostQuitMessage, BeginPaint, EndPaint};
 use gdi32::{TextOutA};
 
-use kernel32::{FreeConsole};
-
 static SZ_CLASS: &'static [u8] = b"L\0n\0d\0C\0r\0a\0f\0t\0";
 static SZ_TITLE: &'static [u8] = b"t\0i\0t\0l\0e\0\0\0";
 static SZ_TEXT: &'static [u8] = b"Hello, world!";
+static mut bitmap_data: *mut c_void = 0 as *mut c_void;
+static mut bitmap_handle: winapi::HBITMAP = 0 as winapi::HBITMAP;
+static mut bitmap_device_context: HDC = 0 as HDC;
+static mut bit_map_info: winapi::BITMAPINFO = winapi::BITMAPINFO{
+    bmiHeader: winapi::BITMAPINFOHEADER{
+        biSize: 0,
+        biWidth: 0,
+        biHeight: 0,
+        biPlanes: 1,
+        biBitCount: 32,
+        biCompression: winapi::BI_RGB,
+        biSizeImage: 0,
+        biXPelsPerMeter: 0,
+        biYPelsPerMeter: 0,
+        biClrUsed: 0,
+        biClrImportant: 0,
+    },
+    bmiColors: []
+};
+
+macro_rules! c_str {
+    ($s:expr) => { {
+        concat!($s, "\0").as_ptr() as *const i8
+    } }
+}
+
+unsafe
+fn win32_resize_dib_section(width: i32, height: i32){
+    if bitmap_handle != 0 as winapi::HBITMAP{
+        gdi32::DeleteObject(bitmap_handle as *mut c_void);
+    }
+    if bitmap_device_context == 0 as HDC {
+        bitmap_device_context = gdi32::CreateCompatibleDC(0 as HDC);
+    }
+    bit_map_info.bmiHeader.biSize = size_of::<winapi::BITMAPINFOHEADER>() as u32;
+    bit_map_info.bmiHeader.biWidth = width;
+    bit_map_info.bmiHeader.biHeight = height;
+    bitmap_handle = gdi32::CreateDIBSection(
+        bitmap_device_context,
+        &bit_map_info,
+        winapi::DIB_RGB_COLORS,
+        &mut bitmap_data,
+        zeroed(),
+        0
+    );
+}
+
+unsafe
+fn win32_update_window( device_context: HDC, x: i32, y: i32, width: i32, height: i32){
+    gdi32::StretchDIBits(
+        device_context,
+        x, y, width, height,
+        x, y, width, height,
+        bitmap_data,
+        zeroed(),
+        0, zeroed()
+    );
+}
 
 unsafe extern "system"
 fn wnd_proc(window: HWND, message: UINT, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
@@ -30,11 +87,17 @@ fn wnd_proc(window: HWND, message: UINT, wparam: WPARAM, lparam: LPARAM) -> LRES
             0
         },
         WM_SIZE => {
-            println!("WM_SIZE");
+            let mut rect = zeroed::<winapi::RECT>();
+            user32::GetClientRect(window, &mut rect);
+            let width = rect.right - rect.left;
+            let height = rect.bottom - rect.top;
+            println!("WM_SIZE : {0} {1}", width, height);
+            win32_resize_dib_section(width, height);
             0
         },
         WM_CLOSE => {
             println!("WM_CLOSE");
+            PostQuitMessage(0);
             DefWindowProcW(window, message, wparam, lparam)
         },
         WM_ACTIVATEAPP => {
@@ -43,8 +106,14 @@ fn wnd_proc(window: HWND, message: UINT, wparam: WPARAM, lparam: LPARAM) -> LRES
         }
         WM_PAINT => {
             let mut paint = zeroed();
-            let hdc = BeginPaint(window, &mut paint);
-            TextOutA(hdc, 5, 5,
+            let device_context = BeginPaint(window, &mut paint);
+            let x = paint.rcPaint.left;
+            let y = paint.rcPaint.top;
+            let width = paint.rcPaint.right - paint.rcPaint.left;
+            let height = paint.rcPaint.bottom - paint.rcPaint.top;
+            win32_update_window(device_context, x, y, width, height);
+            gdi32::PatBlt(device_context, x, y, width, height, winapi::BLACKNESS);
+            TextOutA(device_context, 5, 5,
                 SZ_TEXT.as_ptr() as *const i8,
                 SZ_TEXT.len() as i32
             );
@@ -91,8 +160,8 @@ fn main() {
                     WS_OVERLAPPEDWINDOW|WS_VISIBLE,
                     CW_USEDEFAULT,
                     CW_USEDEFAULT,
-                    500,
-                    100,
+                    CW_USEDEFAULT,
+                    CW_USEDEFAULT,
                     0 as HWND, 0 as HMENU,
                     h_instance,
                     0 as LPVOID
@@ -105,10 +174,8 @@ fn main() {
                         0 as UINT
                     );
                 } else {
-                    ShowWindow(window, SW_SHOWDEFAULT);
-                    FreeConsole();
                     let mut msg = zeroed();
-                    while GetMessageW(&mut msg, 0 as HWND, 0, 0) > 0 {
+                    while GetMessageW(&mut msg, 0 as HWND, 0, 0) != 0 {
                         TranslateMessage(&msg);
                         DispatchMessageW(&msg);
                     }
