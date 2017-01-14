@@ -7,19 +7,20 @@ use std::mem::{size_of, zeroed};
 use std::os::raw::{c_void};
 
 use winapi::{UINT, WPARAM, LPARAM, LRESULT, LPVOID, LPCSTR, LPCWSTR};
-use winapi::{HWND, HDC, HMENU, HICON, HCURSOR, HBRUSH};
+use winapi::{HWND, HDC, HMENU, HICON, HCURSOR, HBRUSH, RECT};
 use winapi::{WNDCLASSEXW, CS_OWNDC, CS_VREDRAW, CS_HREDRAW, COLOR_WINDOWFRAME};
 use winapi::{WS_OVERLAPPEDWINDOW, WS_VISIBLE, CW_USEDEFAULT};
-use winapi::{WM_DESTROY, WM_PAINT, WM_SIZE, WM_CLOSE, WM_ACTIVATEAPP};
+use winapi::{WM_DESTROY, WM_PAINT, WM_SIZE, WM_CLOSE, WM_QUIT, WM_ACTIVATEAPP};
 use kernel32::{GetModuleHandleA};
 use user32::{RegisterClassExW, CreateWindowExW, MessageBoxA};
-use user32::{GetMessageW, TranslateMessage, DispatchMessageW};
+use user32::{PeekMessageW, TranslateMessage, DispatchMessageW};
 use user32::{DefWindowProcW, PostQuitMessage, BeginPaint, EndPaint};
-use gdi32::{TextOutA};
 
-static SZ_CLASS: &'static [u8] = b"L\0n\0d\0C\0r\0a\0f\0t\0";
+static SZ_CLASS: &'static [u8] = b"H\0a\0n\0d\0m\0a\0d\0e\0H\0e\0r\0o\0";
 static SZ_TITLE: &'static [u8] = b"t\0i\0t\0l\0e\0\0\0";
-static SZ_TEXT: &'static [u8] = b"Hello, world!";
+static mut running: bool = false;
+static mut bitmap_width: i32 = 0;
+static mut bitmap_height: i32 = 0;
 static mut bitmap_memory: *mut c_void = 0 as *mut c_void;
 static mut bitmap_info: winapi::BITMAPINFO = winapi::BITMAPINFO{
     bmiHeader: winapi::BITMAPINFOHEADER{
@@ -38,10 +39,20 @@ static mut bitmap_info: winapi::BITMAPINFO = winapi::BITMAPINFO{
     bmiColors: []
 };
 
-macro_rules! c_str {
-    ($s:expr) => { {
-        concat!($s, "\0").as_ptr() as *const i8
-    } }
+unsafe
+fn render_weird_gradient(x_offset: i32, y_offset: i32) {
+    let bytes_per_pixel = 4;
+    let pitch = bitmap_width * bytes_per_pixel;
+    println!("drawing {0} rows at {1} bytes each", bitmap_height, pitch);
+    let mut row = bitmap_memory;
+    for y in 0..bitmap_height {
+        let mut pixel = row as *mut [u8; 4];
+        for x in 0..bitmap_width {
+            *pixel = [(x + x_offset) as u8, (y + y_offset) as u8, 0, 0];
+            pixel = pixel.offset(1);
+        }
+        row = row.offset(pitch as isize);
+    }
 }
 
 unsafe
@@ -49,25 +60,44 @@ fn win32_resize_dib_section(width: i32, height: i32){
     if !bitmap_memory.is_null(){
         kernel32::VirtualFree(bitmap_memory, 0, winapi::winnt::MEM_RELEASE);
     }
+    bitmap_width = width;
+    bitmap_height = height;
+    bitmap_info.bmiHeader = winapi::BITMAPINFOHEADER{
+        biSize: size_of::<winapi::BITMAPINFOHEADER>() as u32,
+        biWidth: width,
+        biHeight: -height,
+        biPlanes: 1,
+        biBitCount: 32,
+        biCompression: winapi::BI_RGB,
+        biSizeImage: 0,
+        biXPelsPerMeter: 0,
+        biYPelsPerMeter: 0,
+        biClrUsed: 0,
+        biClrImportant: 0,
+    };
     bitmap_info.bmiHeader.biSize = size_of::<winapi::BITMAPINFOHEADER>() as u32;
     bitmap_info.bmiHeader.biWidth = width;
-    bitmap_info.bmiHeader.biHeight = height;
-    let bytes_per_pixel = 4;
-    let bitmap_memory_size = (width as u64 * height as u64)*bytes_per_pixel;
+    bitmap_info.bmiHeader.biHeight = -height;
+    let bytes_per_pixel = 4 as i32;
+    let bitmap_memory_size = (width as u64 * height as u64) * bytes_per_pixel as u64;
     bitmap_memory = kernel32::VirtualAlloc(
         0 as *mut c_void,
         bitmap_memory_size,
         winapi::winnt::MEM_COMMIT,
         winapi::winnt::PAGE_READWRITE
     );
+
+    render_weird_gradient(128,0);
 }
 
 unsafe
-fn win32_update_window( device_context: HDC, x: i32, y: i32, width: i32, height: i32){
+fn win32_update_window( device_context: HDC, window_rect: RECT){
+    let window_width = window_rect.right - window_rect.left;
+    let window_height = window_rect.bottom - window_rect.top;
     gdi32::StretchDIBits(
         device_context,
-        x, y, width, height,
-        x, y, width, height,
+        0, 0, bitmap_width, bitmap_height,
+        0, 0, window_width, window_height,
         bitmap_memory,
         &bitmap_info,
         winapi::DIB_RGB_COLORS, winapi::SRCCOPY
@@ -82,7 +112,7 @@ fn wnd_proc(window: HWND, message: UINT, wparam: WPARAM, lparam: LPARAM) -> LRES
             0
         },
         WM_SIZE => {
-            let mut rect = zeroed::<winapi::RECT>();
+            let mut rect = zeroed::<RECT>();
             user32::GetClientRect(window, &mut rect);
             let width = rect.right - rect.left;
             let height = rect.bottom - rect.top;
@@ -93,25 +123,18 @@ fn wnd_proc(window: HWND, message: UINT, wparam: WPARAM, lparam: LPARAM) -> LRES
         WM_CLOSE => {
             println!("WM_CLOSE");
             PostQuitMessage(0);
-            DefWindowProcW(window, message, wparam, lparam)
+            0
         },
         WM_ACTIVATEAPP => {
             println!("WM_ACTIVATEAPP");
             0
         }
         WM_PAINT => {
-            let mut paint = zeroed();
+            let mut rect = zeroed::<RECT>();
+            user32::GetClientRect(window, &mut rect);
+            let mut paint = zeroed::<winapi::PAINTSTRUCT>();
             let device_context = BeginPaint(window, &mut paint);
-            let x = paint.rcPaint.left;
-            let y = paint.rcPaint.top;
-            let width = paint.rcPaint.right - paint.rcPaint.left;
-            let height = paint.rcPaint.bottom - paint.rcPaint.top;
-            win32_update_window(device_context, x, y, width, height);
-            gdi32::PatBlt(device_context, x, y, width, height, winapi::BLACKNESS);
-            TextOutA(device_context, 5, 5,
-                SZ_TEXT.as_ptr() as *const i8,
-                SZ_TEXT.len() as i32
-            );
+            win32_update_window(device_context, rect);
             EndPaint(window, &mut paint);
             0
         },
@@ -170,9 +193,24 @@ fn main() {
                     );
                 } else {
                     let mut msg = zeroed();
-                    while GetMessageW(&mut msg, 0 as HWND, 0, 0) != 0 {
-                        TranslateMessage(&msg);
-                        DispatchMessageW(&msg);
+                    running = true;
+                    let mut x_offset = 0;
+                    let y_offset = 0;
+                    while running {
+                        while PeekMessageW(&mut msg, 0 as HWND, 0, 0, winapi::PM_REMOVE) != 0 {
+                            if msg.message == WM_QUIT {
+                                running = false;
+                            }
+                            TranslateMessage(&msg);
+                            DispatchMessageW(&msg);
+                        }
+                        let mut rect = zeroed::<RECT>();
+                        user32::GetClientRect(window, &mut rect);
+                        let device_context = user32::GetDC(window);
+                        render_weird_gradient(x_offset, y_offset);
+                        win32_update_window(device_context, rect);
+                        user32::ReleaseDC(window, device_context);
+                        x_offset += 1;
                     }
                 };
             }
