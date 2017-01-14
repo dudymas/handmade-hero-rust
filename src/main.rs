@@ -62,19 +62,6 @@ fn win32_resize_dib_section(width: i32, height: i32){
     }
     bitmap_width = width;
     bitmap_height = height;
-    bitmap_info.bmiHeader = winapi::BITMAPINFOHEADER{
-        biSize: size_of::<winapi::BITMAPINFOHEADER>() as u32,
-        biWidth: width,
-        biHeight: -height,
-        biPlanes: 1,
-        biBitCount: 32,
-        biCompression: winapi::BI_RGB,
-        biSizeImage: 0,
-        biXPelsPerMeter: 0,
-        biYPelsPerMeter: 0,
-        biClrUsed: 0,
-        biClrImportant: 0,
-    };
     bitmap_info.bmiHeader.biSize = size_of::<winapi::BITMAPINFOHEADER>() as u32;
     bitmap_info.bmiHeader.biWidth = width;
     bitmap_info.bmiHeader.biHeight = -height;
